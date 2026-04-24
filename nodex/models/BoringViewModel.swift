@@ -18,7 +18,7 @@ class BoringViewModel: NSObject, ObservableObject {
 
     @Published var contentType: ContentType = .normal
     @Published private(set) var notchState: NotchState = .closed
-    @Published private(set) var nodexMediaPhase: NodexMediaPhase = .closed
+    @Published private(set) var nodexMediaPhase: NodexMediaPhase = .idle
 
     @Published var dragDetectorTargeting: Bool = false
     @Published var generalDropTargeting: Bool = false
@@ -37,6 +37,8 @@ class BoringViewModel: NSObject, ObservableObject {
 
     @Published var notchSize: CGSize = getClosedNotchSize()
     @Published var closedNotchSize: CGSize = getClosedNotchSize()
+    var nodexTrackPreviewDuration: Duration = .seconds(5)
+    private var nodexTrackPreviewTask: Task<Void, Never>?
     
     let webcamManager = WebcamManager.shared
     @Published var isCameraExpanded: Bool = false
@@ -47,6 +49,7 @@ class BoringViewModel: NSObject, ObservableObject {
     }
 
     func destroy() {
+        nodexTrackPreviewTask?.cancel()
         cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
     }
@@ -141,12 +144,56 @@ class BoringViewModel: NSObject, ObservableObject {
 
     func toggleNodexLyrics() {
         switch nodexMediaPhase {
-        case .expandedLyrics:
-            setNodexMediaPhase(.expanded)
-        case .expanded:
-            setNodexMediaPhase(.expandedLyrics)
-        case .closed, .hoverCompact:
-            setNodexMediaPhase(.expandedLyrics)
+        case .lyrics:
+            setNodexMediaPhase(.controls)
+        case .controls:
+            cancelNodexTrackPreview(returnToBase: false)
+            setNodexMediaPhase(.lyrics)
+        case .idle, .playingBase, .trackPreview:
+            break
+        }
+    }
+
+    func syncNodexPlaybackState(isPlaying: Bool) {
+        if isPlaying {
+            if nodexMediaPhase == .idle {
+                setNodexMediaPhase(.playingBase)
+            }
+            return
+        }
+
+        cancelNodexTrackPreview(returnToBase: false)
+        setNodexMediaPhase(.idle)
+    }
+
+    func showNodexTrackPreview(isPlaying: Bool = MusicManager.shared.isPlaying) {
+        guard isPlaying else {
+            cancelNodexTrackPreview(returnToBase: false)
+            setNodexMediaPhase(.idle)
+            return
+        }
+
+        guard !nodexMediaPhase.isOpenPresentation else { return }
+
+        nodexTrackPreviewTask?.cancel()
+        setNodexMediaPhase(.trackPreview)
+
+        let duration = nodexTrackPreviewDuration
+        let returnPhase: NodexMediaPhase = isPlaying ? .playingBase : .idle
+        nodexTrackPreviewTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: duration)
+            guard let self, !Task.isCancelled, self.nodexMediaPhase == .trackPreview else { return }
+            self.setNodexMediaPhase(returnPhase)
+            self.nodexTrackPreviewTask = nil
+        }
+    }
+
+    func cancelNodexTrackPreview(returnToBase: Bool = true, isPlaying: Bool = MusicManager.shared.isPlaying) {
+        nodexTrackPreviewTask?.cancel()
+        nodexTrackPreviewTask = nil
+
+        if returnToBase && nodexMediaPhase == .trackPreview {
+            setNodexMediaPhase(isPlaying ? .playingBase : .idle)
         }
     }
 
@@ -212,18 +259,20 @@ class BoringViewModel: NSObject, ObservableObject {
     }
 
     func open() {
-        setNodexMediaPhase(.expanded)
+        cancelNodexTrackPreview(returnToBase: false)
+        setNodexMediaPhase(.controls)
         
         // Force music information update when notch is opened
         MusicManager.shared.forceUpdate()
     }
 
-    func close() {
+    func close(isPlaying: Bool = MusicManager.shared.isPlaying) {
         // Do not close while a share picker or sharing service is active
         if SharingStateManager.shared.preventNotchClose {
             return
         }
-        setNodexMediaPhase(.closed)
+        cancelNodexTrackPreview(returnToBase: false)
+        setNodexMediaPhase(isPlaying ? .playingBase : .idle)
         self.notchSize = getClosedNotchSize(screenUUID: self.screenUUID)
         self.closedNotchSize = self.notchSize
         self.isBatteryPopoverActive = false

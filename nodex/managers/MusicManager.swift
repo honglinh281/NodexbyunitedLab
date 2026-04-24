@@ -14,6 +14,25 @@ let defaultImage: NSImage = .init(
     accessibilityDescription: "Album Art"
 )!
 
+struct NodexTrackChangeGate {
+    private(set) var hasObservedPlayableTrack = false
+
+    mutating func shouldEmitTrackChange(isPlaying: Bool, title: String, artist: String, hasContentChange: Bool) -> Bool {
+        let hasPlayableMetadata = isPlaying
+            && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        guard hasPlayableMetadata else { return false }
+
+        if !hasObservedPlayableTrack {
+            hasObservedPlayableTrack = true
+            return false
+        }
+
+        return hasContentChange
+    }
+}
+
 class MusicManager: ObservableObject {
     // MARK: - Properties
     static let shared = MusicManager()
@@ -53,6 +72,7 @@ class MusicManager: ObservableObject {
     @Published var syncedLyrics: [(time: Double, text: String)] = []
     @Published var canFavoriteTrack: Bool = false
     @Published var isFavoriteTrack: Bool = false
+    @Published private(set) var trackChangeToken: UUID = UUID()
 
     private var artworkData: Data? = nil
 
@@ -67,6 +87,7 @@ class MusicManager: ObservableObject {
 
     @Published var isTransitioning: Bool = false
     private var transitionWorkItem: DispatchWorkItem?
+    private var nodexTrackChangeGate = NodexTrackChangeGate()
 
     // MARK: - Initialization
     init() {
@@ -203,6 +224,12 @@ class MusicManager: ObservableObject {
         // Check for artwork changes
         let artworkChanged = state.artwork != nil && state.artwork != self.artworkData
         let hasContentChange = titleChanged || artistChanged || albumChanged || artworkChanged || bundleChanged
+        let shouldEmitNodexTrackChange = nodexTrackChangeGate.shouldEmitTrackChange(
+            isPlaying: state.isPlaying,
+            title: state.title,
+            artist: state.artist,
+            hasContentChange: hasContentChange
+        )
 
         // Handle artwork and visual transitions for changed content
         if hasContentChange {
@@ -219,13 +246,10 @@ class MusicManager: ObservableObject {
             }
             self.artworkData = state.artwork
 
-            if artworkChanged || state.artwork == nil {
-                // Update last artwork change values
-                self.lastArtworkTitle = state.title
-                self.lastArtworkArtist = state.artist
-                self.lastArtworkAlbum = state.album
-                self.lastArtworkBundleIdentifier = state.bundleIdentifier
-            }
+            self.lastArtworkTitle = state.title
+            self.lastArtworkArtist = state.artist
+            self.lastArtworkAlbum = state.album
+            self.lastArtworkBundleIdentifier = state.bundleIdentifier
 
             // Only update sneak peek if there's actual content and something changed
             if !state.title.isEmpty && !state.artist.isEmpty && state.isPlaying {
@@ -234,6 +258,10 @@ class MusicManager: ObservableObject {
 
             // Fetch lyrics on content change
             self.fetchLyricsIfAvailable(bundleIdentifier: state.bundleIdentifier, title: state.title, artist: state.artist)
+        }
+
+        if shouldEmitNodexTrackChange {
+            self.trackChangeToken = UUID()
         }
 
         let timeChanged = state.currentTime != self.elapsedTime

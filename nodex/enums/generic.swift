@@ -31,42 +31,47 @@ public enum NotchViews {
 }
 
 public enum NodexMediaPhase: CaseIterable, Equatable {
-    case closed
-    case hoverCompact
-    case expanded
-    case expandedLyrics
+    case idle
+    case playingBase
+    case trackPreview
+    case controls
+    case lyrics
 
     var notchSize: CGSize {
         switch self {
-        case .closed:
+        case .idle, .playingBase:
             return nodexClosedNotchSize
-        case .hoverCompact:
-            return nodexHoverNotchSize
-        case .expanded:
-            return nodexExpandedNotchSize
-        case .expandedLyrics:
-            return nodexExpandedLyricsNotchSize
+        case .trackPreview:
+            return nodexTrackPreviewNotchSize
+        case .controls:
+            return nodexControlsNotchSize
+        case .lyrics:
+            return nodexLyricsNotchSize
         }
     }
 
     var bottomRadius: CGFloat {
         switch self {
-        case .closed:
+        case .idle, .playingBase:
             return 8
-        case .hoverCompact:
+        case .trackPreview:
             return 16
-        case .expanded, .expandedLyrics:
+        case .controls, .lyrics:
             return 24
         }
     }
 
     var notchState: NotchState {
         switch self {
-        case .closed, .hoverCompact:
+        case .idle, .playingBase, .trackPreview:
             return .closed
-        case .expanded, .expandedLyrics:
+        case .controls, .lyrics:
             return .open
         }
+    }
+
+    var isOpenPresentation: Bool {
+        notchState == .open
     }
 }
 

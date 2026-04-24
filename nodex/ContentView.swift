@@ -178,6 +178,19 @@ struct ContentView: View {
         .background(dragDetector)
         .preferredColorScheme(.dark)
         .environmentObject(vm)
+        .onAppear {
+            vm.syncNodexPlaybackState(isPlaying: musicManager.isPlaying)
+        }
+        .onChange(of: musicManager.isPlaying) { _, isPlaying in
+            withAnimation(animationSpring) {
+                vm.syncNodexPlaybackState(isPlaying: isPlaying)
+            }
+        }
+        .onReceive(musicManager.$trackChangeToken.dropFirst()) { _ in
+            withAnimation(animationSpring) {
+                vm.showNodexTrackPreview(isPlaying: musicManager.isPlaying)
+            }
+        }
         .onChange(of: vm.anyDropZoneTargeting) { _, isTargeted in
             anyDropDebounceTask?.cancel()
 
@@ -366,20 +379,22 @@ struct ContentView: View {
         hoverTask?.cancel()
         
         if hovering {
+            let wasTrackPreview = vm.nodexMediaPhase == .trackPreview
             withAnimation(animationSpring) {
                 isHovering = true
-                if vm.nodexMediaPhase == .closed {
-                    vm.setNodexMediaPhase(.hoverCompact)
-                }
+                vm.cancelNodexTrackPreview(returnToBase: true, isPlaying: musicManager.isPlaying)
             }
             
-            if (vm.notchState == .closed || vm.nodexMediaPhase == .hoverCompact) && Defaults[.enableHaptics] {
+            if vm.notchState == .closed && Defaults[.enableHaptics] {
                 haptics.toggle()
             }
             
-            guard vm.notchState == .closed,
-                  !coordinator.sneakPeek.show,
-                  Defaults[.openNotchOnHover] else { return }
+            guard vm.notchState == .closed else { return }
+
+            if wasTrackPreview {
+                doOpen()
+                return
+            }
             
             hoverTask = Task {
                 try? await Task.sleep(for: .seconds(Defaults[.minimumHoverDuration]))
@@ -387,8 +402,7 @@ struct ContentView: View {
                 
                 await MainActor.run {
                     guard self.vm.notchState == .closed,
-                          self.isHovering,
-                          !self.coordinator.sneakPeek.show else { return }
+                          self.isHovering else { return }
                     
                     self.doOpen()
                 }
@@ -403,9 +417,7 @@ struct ContentView: View {
                         self.isHovering = false
                     }
                     
-                    if self.vm.nodexMediaPhase == .hoverCompact && !SharingStateManager.shared.preventNotchClose {
-                        self.vm.close()
-                    } else if self.vm.notchState == .open && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose {
+                    if self.vm.notchState == .open && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose {
                         self.vm.close()
                     }
                 }
@@ -496,16 +508,19 @@ private struct NodexMediaSurface: View {
             Color.black
 
             switch vm.nodexMediaPhase {
-            case .closed:
-                closedContent
+            case .idle:
+                idleContent
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
-            case .hoverCompact:
-                hoverContent
+            case .playingBase:
+                playingBaseContent
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
+            case .trackPreview:
+                trackPreviewContent
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-            case .expanded:
+            case .controls:
                 expandedContent(showLyrics: false)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-            case .expandedLyrics:
+            case .lyrics:
                 expandedContent(showLyrics: true)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
@@ -515,7 +530,16 @@ private struct NodexMediaSurface: View {
         .compositingGroup()
     }
 
-    private var closedContent: some View {
+    private var idleContent: some View {
+        ZStack {
+            NodexIdleGlyph()
+                .frame(width: 24, height: 24)
+                .foregroundStyle(.white.opacity(0.36))
+        }
+        .frame(width: nodexClosedNotchSize.width, height: nodexClosedNotchSize.height)
+    }
+
+    private var playingBaseContent: some View {
         ZStack(alignment: .topLeading) {
             decorativeNotes(x: 26, y: -3)
 
@@ -529,7 +553,7 @@ private struct NodexMediaSurface: View {
         .frame(width: nodexClosedNotchSize.width, height: nodexClosedNotchSize.height)
     }
 
-    private var hoverContent: some View {
+    private var trackPreviewContent: some View {
         ZStack(alignment: .topLeading) {
             decorativeNotes(x: 26, y: -3)
 
@@ -547,14 +571,14 @@ private struct NodexMediaSurface: View {
 
                 Text("Now playing:")
                     .font(.system(size: 15, weight: .regular, design: .default))
-                    .foregroundStyle(.white.opacity(0.64))
+                    .foregroundStyle(Color(red: 65.0 / 255.0, green: 217.0 / 255.0, blue: 117.0 / 255.0))
                     .fixedSize()
 
                 MarqueeText(
                     .constant(compactLine),
                     font: .system(size: 15, weight: .regular),
                     nsFont: .body,
-                    textColor: .white,
+                    textColor: .white.opacity(0.64),
                     minDuration: 1.2,
                     frameWidth: 215
                 )
@@ -569,7 +593,7 @@ private struct NodexMediaSurface: View {
                 .frame(height: 18)
                 .position(x: 285.5, y: 54)
         }
-        .frame(width: nodexHoverNotchSize.width, height: nodexHoverNotchSize.height)
+        .frame(width: nodexTrackPreviewNotchSize.width, height: nodexTrackPreviewNotchSize.height)
     }
 
     private func expandedContent(showLyrics: Bool) -> some View {
@@ -594,8 +618,8 @@ private struct NodexMediaSurface: View {
                 .frame(width: 364, height: 48)
                 .position(x: 182, y: showLyrics ? 352 : 225)
         }
-        .frame(width: showLyrics ? nodexExpandedLyricsNotchSize.width : nodexExpandedNotchSize.width,
-               height: showLyrics ? nodexExpandedLyricsNotchSize.height : nodexExpandedNotchSize.height)
+        .frame(width: showLyrics ? nodexLyricsNotchSize.width : nodexControlsNotchSize.width,
+               height: showLyrics ? nodexLyricsNotchSize.height : nodexControlsNotchSize.height)
     }
 
     private var titleContainer: some View {
@@ -650,7 +674,7 @@ private struct NodexMediaSurface: View {
                     vm.toggleNodexLyrics()
                 }
             } label: {
-                Image(systemName: vm.nodexMediaPhase == .expandedLyrics ? "text.quote" : "captions.bubble")
+                Image(systemName: vm.nodexMediaPhase == .lyrics ? "text.quote" : "captions.bubble")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white.opacity(0.42))
                     .frame(width: 20, height: 20)
@@ -662,25 +686,28 @@ private struct NodexMediaSurface: View {
     private var lyricsBlock: some View {
         let lines = lyricLines()
 
-        return ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 8) {
+        return ZStack(alignment: .top) {
+            VStack(alignment: .center, spacing: 8) {
                 Text(lines.current)
                     .font(.system(size: 22, weight: .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .frame(width: 320, alignment: .leading)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 320, alignment: .center)
 
                 Text(lines.next)
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(1)
-                    .frame(width: 320, alignment: .leading)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 320, alignment: .center)
 
                 Text(lines.after)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white.opacity(0.32))
                     .lineLimit(1)
-                    .frame(width: 320, alignment: .leading)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 320, alignment: .center)
             }
             .padding(.top, 12)
 
@@ -770,16 +797,16 @@ private struct NodexMediaSurface: View {
 
     private var bottomMenu: some View {
         HStack(spacing: 10) {
-            NodexMenuButton(systemName: "music.note", isActive: vm.nodexMediaPhase == .expanded) {
+            NodexMenuButton(systemName: "music.note", isActive: vm.nodexMediaPhase == .controls) {
                 triggerHaptic()
                 withAnimation(.smooth(duration: 0.22)) {
-                    vm.setNodexMediaPhase(.expanded)
+                    vm.setNodexMediaPhase(.controls)
                 }
             }
-            NodexMenuButton(systemName: "text.quote", isActive: vm.nodexMediaPhase == .expandedLyrics) {
+            NodexMenuButton(systemName: "text.quote", isActive: vm.nodexMediaPhase == .lyrics) {
                 triggerHaptic()
                 withAnimation(.smooth(duration: 0.22)) {
-                    vm.setNodexMediaPhase(.expandedLyrics)
+                    vm.setNodexMediaPhase(.lyrics)
                 }
             }
             NodexMenuButton(systemName: "list.bullet") {
@@ -916,6 +943,29 @@ private struct NodexMediaSurface: View {
         if Defaults[.enableHaptics] {
             haptics.toggle()
         }
+    }
+}
+
+private struct NodexIdleGlyph: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(lineWidth: 2.6)
+                .frame(width: 24, height: 24)
+
+            Capsule()
+                .frame(width: 5.5, height: 2.6)
+                .offset(x: -3.8, y: -2.5)
+
+            Capsule()
+                .frame(width: 5.5, height: 2.6)
+                .offset(x: 5.4, y: -2.5)
+
+            Capsule()
+                .frame(width: 9.5, height: 2.6)
+                .offset(x: 3.2, y: 5.5)
+        }
+        .frame(width: 24, height: 24)
     }
 }
 
