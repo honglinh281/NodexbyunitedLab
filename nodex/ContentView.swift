@@ -531,10 +531,10 @@ private struct NodexMediaSurface: View {
     }
 
     private var idleContent: some View {
-        ZStack {
-            NodexIdleGlyph()
-                .frame(width: 24, height: 24)
-                .foregroundStyle(.white.opacity(0.36))
+        ZStack(alignment: .topLeading) {
+            NodexPixelBlob()
+                .frame(width: 28, height: 28)
+                .position(x: 20, y: 17)
         }
         .frame(width: nodexClosedNotchSize.width, height: nodexClosedNotchSize.height)
     }
@@ -946,26 +946,68 @@ private struct NodexMediaSurface: View {
     }
 }
 
-private struct NodexIdleGlyph: View {
+private struct NodexPixelBlob: View {
+    private let pixelCount = 20
+    private let cellRatio = 4.0 / 6.0
+    private let foreground = Color(red: 1.0, green: 44.0 / 255.0, blue: 247.0 / 255.0)
+    private let background = Color(red: 13.0 / 255.0, green: 0, blue: 16.0 / 255.0)
+
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(lineWidth: 2.6)
-                .frame(width: 24, height: 24)
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            Canvas { context, size in
+                let side = min(size.width, size.height)
+                let step = side / CGFloat(pixelCount)
+                let cell = step * CGFloat(cellRatio)
+                let origin = CGPoint(
+                    x: (size.width - side) / 2,
+                    y: (size.height - side) / 2
+                )
+                let t = timeline.date.timeIntervalSinceReferenceDate
 
-            Capsule()
-                .frame(width: 5.5, height: 2.6)
-                .offset(x: -3.8, y: -2.5)
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(background.opacity(0.55)))
 
-            Capsule()
-                .frame(width: 5.5, height: 2.6)
-                .offset(x: 5.4, y: -2.5)
+                for iy in 0..<pixelCount {
+                    for ix in 0..<pixelCount {
+                        let value = max(0, min(1, blobRule(
+                            x: Double(ix) / Double(pixelCount - 1),
+                            y: Double(iy) / Double(pixelCount - 1),
+                            time: t
+                        )))
 
-            Capsule()
-                .frame(width: 9.5, height: 2.6)
-                .offset(x: 3.2, y: 5.5)
+                        guard value > 0 else { continue }
+
+                        let rect = CGRect(
+                            x: origin.x + CGFloat(ix) * step,
+                            y: origin.y + CGFloat(iy) * step,
+                            width: cell,
+                            height: cell
+                        )
+                        context.fill(Path(rect), with: .color(foreground.opacity(value)))
+                    }
+                }
+            }
         }
-        .frame(width: 24, height: 24)
+        .drawingGroup(opaque: false)
+    }
+
+    private func blobRule(x: Double, y: Double, time: Double) -> Double {
+        let a = x - 0.5
+        let c = y - 0.5
+        let angle = atan2(c, a)
+        let distance = sqrt(a * a + c * c)
+        let wave = 0.28
+            + sin(angle * 3 + time) * 0.07
+            + sin(angle * 5 - time * 0.9) * 0.04
+
+        if distance > wave + 0.07 {
+            return 0
+        }
+
+        if distance > wave {
+            return (1 - (distance - wave) / 0.07) * 0.55
+        }
+
+        return 0.55 + (1 - distance / max(wave, 0.0001)) * 0.45
     }
 }
 
