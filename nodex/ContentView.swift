@@ -325,18 +325,14 @@ struct ContentView: View {
 
             HStack {
                 if useMusicVisualizer {
-                    Rectangle()
-                        .fill(
-                            Defaults[.coloredSpectrogram]
-                                ? Color(nsColor: musicManager.avgColor).gradient
-                                : Color.gray.gradient
-                        )
-                        .frame(width: 50, alignment: .center)
+                    NodexWaveView(
+                        isPlaying: $musicManager.isPlaying,
+                        tint: Defaults[.coloredSpectrogram]
+                            ? Color(nsColor: musicManager.avgColor)
+                                .ensureMinimumBrightness(factor: 0.65)
+                            : .gray
+                    )
                         .matchedGeometryEffect(id: "spectrum", in: albumArtNamespace)
-                        .mask {
-                            AudioSpectrumView(isPlaying: $musicManager.isPlaying)
-                                .frame(width: 16, height: 12)
-                        }
                 } else {
                     LottieAnimationContainer()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -548,7 +544,7 @@ private struct NodexMediaSurface: View {
 
             NodexWaveView(isPlaying: $musicManager.isPlaying, tint: waveTint)
                 .frame(width: 24, height: 24)
-                .position(x: 266, y: 28)
+                .position(x: 266, y: nodexClosedNotchSize.height / 2)
         }
         .frame(width: nodexClosedNotchSize.width, height: nodexClosedNotchSize.height)
     }
@@ -562,29 +558,11 @@ private struct NodexMediaSurface: View {
 
             NodexWaveView(isPlaying: $musicManager.isPlaying, tint: waveTint)
                 .frame(width: 24, height: 24)
-                .position(x: 292, y: 43)
+                .position(x: 292, y: 19)
 
-            HStack(spacing: 2) {
-                Image(systemName: "music.note")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.64))
-
-                Text("Now playing:")
-                    .font(.system(size: 15, weight: .regular, design: .default))
-                    .foregroundStyle(Color(red: 65.0 / 255.0, green: 217.0 / 255.0, blue: 117.0 / 255.0))
-                    .fixedSize()
-
-                MarqueeText(
-                    .constant(compactLine),
-                    font: .system(size: 15, weight: .regular),
-                    nsFont: .body,
-                    textColor: .white.opacity(0.64),
-                    minDuration: 1.2,
-                    frameWidth: 215
-                )
-            }
-            .frame(width: 272, height: 18, alignment: .leading)
-            .position(x: 176, y: 54)
+            NodexTrackPreviewMediaContent(line: compactLine)
+                .frame(width: nodexTrackPreviewNotchSize.width, height: 18)
+                .position(x: nodexTrackPreviewNotchSize.width / 2 + 0.5, y: 54)
 
             fadeEdge(width: 53, leading: true)
                 .frame(height: 18)
@@ -1066,17 +1044,219 @@ private struct NodexMenuButton: View {
     }
 }
 
+struct NodexTrackPreviewMarqueeMetrics {
+    let contentWidth: CGFloat
+    let viewportWidth: CGFloat
+    let centeredContentWidth: CGFloat
+    let longContentStartOffset: CGFloat
+    let loopGap: CGFloat
+    let scrollSpeed: CGFloat
+    let minimumDuration: Double
+
+    init(
+        contentWidth: CGFloat,
+        viewportWidth: CGFloat,
+        centeredContentWidth: CGFloat? = nil,
+        longContentStartOffset: CGFloat = 53,
+        loopGap: CGFloat = 24,
+        scrollSpeed: CGFloat = 32,
+        minimumDuration: Double = 1.2
+    ) {
+        let resolvedCenteredContentWidth = centeredContentWidth ?? max(0, viewportWidth - 80)
+
+        self.contentWidth = contentWidth
+        self.viewportWidth = viewportWidth
+        self.centeredContentWidth = min(viewportWidth, max(0, resolvedCenteredContentWidth))
+        self.longContentStartOffset = max(0, longContentStartOffset)
+        self.loopGap = loopGap
+        self.scrollSpeed = scrollSpeed
+        self.minimumDuration = minimumDuration
+    }
+
+    var needsScrolling: Bool {
+        contentWidth > centeredContentWidth + 1
+    }
+
+    var travelDistance: CGFloat {
+        contentWidth + loopGap
+    }
+
+    var startOffset: CGFloat {
+        needsScrolling ? longContentStartOffset : 0
+    }
+
+    var endOffset: CGFloat {
+        needsScrolling ? longContentStartOffset - travelDistance : 0
+    }
+
+    var duration: Double {
+        max(minimumDuration, Double(travelDistance / scrollSpeed))
+    }
+}
+
+private struct NodexTrackPreviewContentSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
+private struct NodexTrackPreviewMarqueeAnimationKey: Equatable {
+    let line: String
+    let contentWidth: CGFloat
+    let viewportWidth: CGFloat
+}
+
+private struct NodexTrackPreviewMediaContent: View {
+    let line: String
+    @State private var contentWidth: CGFloat = 0
+    @State private var viewportWidth: CGFloat = nodexTrackPreviewNotchSize.width
+    @State private var animate = false
+
+    private let rowHeight: CGFloat = 18
+    private let centeredContentHorizontalInset: CGFloat = 40
+    private let longContentStartOffset: CGFloat = 53
+    private let loopGap: CGFloat = 24
+    private let scrollSpeed: CGFloat = 32
+    private let scrollPause: Double = 0.9
+
+    private var metrics: NodexTrackPreviewMarqueeMetrics {
+        makeMetrics(contentWidth: contentWidth, viewportWidth: viewportWidth)
+    }
+
+    private func makeMetrics(contentWidth: CGFloat, viewportWidth: CGFloat) -> NodexTrackPreviewMarqueeMetrics {
+        NodexTrackPreviewMarqueeMetrics(
+            contentWidth: contentWidth,
+            viewportWidth: viewportWidth,
+            centeredContentWidth: max(0, viewportWidth - centeredContentHorizontalInset * 2),
+            longContentStartOffset: longContentStartOffset,
+            loopGap: loopGap,
+            scrollSpeed: scrollSpeed,
+            minimumDuration: 1.2
+        )
+    }
+
+    private var animationKey: NodexTrackPreviewMarqueeAnimationKey {
+        NodexTrackPreviewMarqueeAnimationKey(
+            line: line,
+            contentWidth: contentWidth,
+            viewportWidth: viewportWidth
+        )
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let currentMetrics = metrics
+
+            ZStack(alignment: currentMetrics.needsScrolling ? .leading : .center) {
+                if currentMetrics.needsScrolling {
+                    HStack(spacing: loopGap) {
+                        measuredRow
+                        row
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .offset(x: animate ? currentMetrics.endOffset : currentMetrics.startOffset)
+                    .animation(
+                        animate
+                            ? .linear(duration: currentMetrics.duration)
+                                .delay(scrollPause)
+                                .repeatForever(autoreverses: false)
+                            : .none,
+                        value: animate
+                    )
+                    .frame(width: geometry.size.width, height: rowHeight, alignment: .leading)
+                } else {
+                    measuredRow
+                        .frame(width: geometry.size.width, height: rowHeight, alignment: .center)
+                }
+            }
+            .frame(
+                width: geometry.size.width,
+                height: rowHeight,
+                alignment: currentMetrics.needsScrolling ? .leading : .center
+            )
+            .clipped()
+            .onAppear {
+                viewportWidth = geometry.size.width
+            }
+            .onChange(of: geometry.size.width) { _, width in
+                viewportWidth = width
+            }
+            .onChange(of: line) { _, _ in
+                animate = false
+            }
+            .onPreferenceChange(NodexTrackPreviewContentSizePreferenceKey.self) { size in
+                if size.width > 0 {
+                    contentWidth = size.width
+                }
+            }
+            .task(id: animationKey) {
+                animate = false
+
+                let currentMetrics = makeMetrics(contentWidth: contentWidth, viewportWidth: viewportWidth)
+                guard currentMetrics.needsScrolling else { return }
+
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard !Task.isCancelled else { return }
+                animate = true
+            }
+        }
+        .frame(height: rowHeight)
+    }
+
+    private var measuredRow: some View {
+        row
+            .background(
+                GeometryReader { contentGeometry in
+                    Color.clear
+                        .preference(
+                            key: NodexTrackPreviewContentSizePreferenceKey.self,
+                            value: contentGeometry.size
+                        )
+                }
+            )
+    }
+
+    private var row: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "music.note")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(.white.opacity(0.64))
+                .frame(width: 16, height: 16)
+
+            HStack(spacing: 2) {
+                Text("Now playing:")
+                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .foregroundStyle(Color(red: 65.0 / 255.0, green: 217.0 / 255.0, blue: 117.0 / 255.0))
+                    .lineLimit(1)
+
+                Text(line)
+                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .foregroundStyle(.white.opacity(0.64))
+                    .lineLimit(1)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: rowHeight, alignment: .center)
+    }
+}
+
 private struct NodexWaveView: View {
     @Binding var isPlaying: Bool
     let tint: Color
 
     var body: some View {
-        tint
-            .mask {
-                AudioSpectrumView(isPlaying: $isPlaying)
-                    .frame(width: 16, height: 14)
-            }
-            .frame(width: 24, height: 24)
+        ZStack {
+            tint
+                .frame(width: 16, height: 14)
+                .mask {
+                    AudioSpectrumView(isPlaying: $isPlaying)
+                        .frame(width: 16, height: 14)
+                }
+        }
+        .frame(width: 24, height: 24, alignment: .center)
     }
 }
 

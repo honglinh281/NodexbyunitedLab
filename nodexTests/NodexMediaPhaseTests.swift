@@ -78,4 +78,87 @@ final class NodexMediaPhaseTests: XCTestCase {
         ))
         XCTAssertFalse(gate.hasObservedPlayableTrack)
     }
+
+    func testTrackPreviewMarqueeMetricsDoNotScrollShortContent() {
+        let metrics = NodexTrackPreviewMarqueeMetrics(
+            contentWidth: 220,
+            viewportWidth: nodexTrackPreviewNotchSize.width,
+            centeredContentWidth: 232,
+            loopGap: 24,
+            scrollSpeed: 32,
+            minimumDuration: 1.2
+        )
+
+        XCTAssertFalse(metrics.needsScrolling)
+        XCTAssertEqual(metrics.startOffset, 0)
+        XCTAssertEqual(metrics.endOffset, 0)
+    }
+
+    func testTrackPreviewMarqueeMetricsKeepUnmeasuredContentVisibleAndStatic() {
+        let metrics = NodexTrackPreviewMarqueeMetrics(
+            contentWidth: 0,
+            viewportWidth: nodexTrackPreviewNotchSize.width,
+            centeredContentWidth: 232,
+            longContentStartOffset: 53,
+            loopGap: 24,
+            scrollSpeed: 32,
+            minimumDuration: 1.2
+        )
+
+        XCTAssertFalse(metrics.needsScrolling)
+        XCTAssertEqual(metrics.startOffset, 0)
+        XCTAssertEqual(metrics.endOffset, 0)
+    }
+
+    func testTrackPreviewMarqueeMetricsTreatContentBeyondCenteredWidthAsLong() {
+        let metrics = NodexTrackPreviewMarqueeMetrics(
+            contentWidth: 260,
+            viewportWidth: nodexTrackPreviewNotchSize.width,
+            centeredContentWidth: 232,
+            longContentStartOffset: 53,
+            loopGap: 24,
+            scrollSpeed: 32,
+            minimumDuration: 1.2
+        )
+
+        XCTAssertTrue(metrics.needsScrolling)
+        XCTAssertEqual(metrics.longContentStartOffset, 53)
+        XCTAssertEqual(metrics.startOffset, 53)
+        XCTAssertEqual(metrics.travelDistance, 284)
+        XCTAssertEqual(metrics.endOffset, -231)
+    }
+
+    func testTrackPreviewMarqueeMetricsScrollWholeOverflowingRowFromFadeEdge() {
+        let metrics = NodexTrackPreviewMarqueeMetrics(
+            contentWidth: 420,
+            viewportWidth: nodexTrackPreviewNotchSize.width,
+            centeredContentWidth: 232,
+            longContentStartOffset: 53,
+            loopGap: 24,
+            scrollSpeed: 32,
+            minimumDuration: 1.2
+        )
+
+        XCTAssertTrue(metrics.needsScrolling)
+        XCTAssertEqual(metrics.travelDistance, 444)
+        XCTAssertEqual(metrics.longContentStartOffset, 53)
+        XCTAssertEqual(metrics.startOffset, 53)
+        XCTAssertEqual(metrics.endOffset, -391)
+        XCTAssertEqual(metrics.duration, 13.875)
+    }
+
+    func testTrackPreviewMarqueeMetricsRespectMinimumDuration() {
+        let metrics = NodexTrackPreviewMarqueeMetrics(
+            contentWidth: 40,
+            viewportWidth: 10,
+            centeredContentWidth: 0,
+            longContentStartOffset: 53,
+            loopGap: 0,
+            scrollSpeed: 1_000,
+            minimumDuration: 1.2
+        )
+
+        XCTAssertTrue(metrics.needsScrolling)
+        XCTAssertEqual(metrics.duration, 1.2)
+    }
 }
